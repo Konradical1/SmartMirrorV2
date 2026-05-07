@@ -1,0 +1,17 @@
+{
+  "name": "smartmirror-v2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "backend": "npm --prefix apps/backend run start",
+    "backend:dev": "npm --prefix apps/backend run dev",
+    "pi": "scripts/run-pi.sh",
+    "pi:voice": "npm --prefix apps/pi-voice run start",
+    "local": "scripts/run-local-test.sh",
+    "test:voice": "npm --prefix apps/pi-voice run test:voice --",
+    "test:chat": "npm --prefix apps/backend run test:chat --",
+    "pi:stop": "scripts/stop-pi.sh",
+    "pi:restart": "npm run pi:stop && npm run pi"
+  }
+}

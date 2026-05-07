@@ -1,0 +1,16 @@
+[Unit]
+Description=SmartMirror Pi voice
+After=network-online.target sound.target smartmirror-pi-display.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=konrad
+WorkingDirectory=/home/konrad/SmartMirrorV2
+ExecStart=/usr/bin/npm run pi:voice
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+

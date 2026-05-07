@@ -1,0 +1,16 @@
+[Unit]
+Description=SmartMirror Pi display
+After=display-manager.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=konrad
+WorkingDirectory=/home/konrad/SmartMirrorV2
+ExecStart=/usr/bin/npm run pi
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
