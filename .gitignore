@@ -25,5 +25,6 @@ yarn-error.log*
 .cache/
 .DS_Store
 MEMORY.md
+.jarvis-memory/
+*.swp
 *.pid
-

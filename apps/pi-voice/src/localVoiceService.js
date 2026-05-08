@@ -9,7 +9,11 @@ import fetch from 'node-fetch';
 import { logger } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SAMPLE_RATE = 16000;
+const CHANNELS = 1;
+const SAMPLE_WIDTH_BYTES = 2;
 let cachedAudioDevice;
+let cachedVoiceRuntimeConfig = null;
 
 /**
  * Record audio from microphone for specified duration
@@ -27,18 +31,17 @@ export async function waitForWakeWord(options = {}) {
 
 export async function waitForWakeWordUtterance(options = {}) {
   return new Promise((resolve, reject) => {
-    const sampleRate = 16000;
-    const channels = 1;
+    const config = voiceRuntimeConfig();
     const pythonBin = resolveVoicePython();
     const detectorPath = path.resolve(__dirname, '../scripts/openwakeword-stdin-detector.py');
     const timeoutMs = Number(options.timeoutMs || process.env.VOICE_WAKE_TIMEOUT_MS || 0);
-    const frameMs = Number(process.env.VOICE_FRAME_MS || 80);
-    const frameBytes = Math.floor(sampleRate * frameMs / 1000 * 2);
-    const preRollMs = Number(options.preRollMs || process.env.VOICE_PRE_ROLL_MS || 1200);
-    const maxCaptureMs = Number(options.maxCaptureMs || process.env.VOICE_WAKE_UTTERANCE_MAX_MS || 20000);
-    const minCaptureMs = Number(options.minCaptureMs || process.env.VOICE_WAKE_UTTERANCE_MIN_MS || 700);
-    const silenceMs = Number(options.silenceMs || process.env.VOICE_WAKE_UTTERANCE_SILENCE_MS || 900);
-    const silenceThreshold = Number(options.silenceThreshold || process.env.VOICE_WAKE_SILENCE_RMS || 0.012);
+    const frameMs = Number(options.frameMs || config.frameMs);
+    const frameBytes = Math.floor(SAMPLE_RATE * frameMs / 1000 * SAMPLE_WIDTH_BYTES);
+    const preRollMs = Number(options.preRollMs || config.wakePreRollMs);
+    const maxCaptureMs = Number(options.maxCaptureMs || config.wakeMaxCaptureMs);
+    const minCaptureMs = Number(options.minCaptureMs || config.wakeMinCaptureMs);
+    const silenceMs = Number(options.silenceMs || config.wakeSilenceMs);
+    const silenceThreshold = Number(options.silenceThreshold || config.wakeSilenceThreshold);
     const preRollFrameCount = Math.max(1, Math.ceil(preRollMs / frameMs));
     const maxCaptureFrames = Math.max(1, Math.ceil(maxCaptureMs / frameMs));
     const minCaptureFrames = Math.max(1, Math.ceil(minCaptureMs / frameMs));
@@ -51,7 +54,11 @@ export async function waitForWakeWordUtterance(options = {}) {
     let capturedFrames = [];
     let preRollFrames = [];
     let silenceFrames = 0;
-    let fastTranscriber = null;
+    let fastTranscriber = createFastTranscriber({
+      onPartial: options.onInterimTranscript,
+      onFinal: options.onFastFinalTranscript,
+      warm: true,
+    });
 
     logger.info('Listening for wake word...');
 
@@ -64,8 +71,8 @@ export async function waitForWakeWordUtterance(options = {}) {
     });
 
     const micInstance = new Mic({
-      rate: sampleRate,
-      channels,
+      rate: SAMPLE_RATE,
+      channels: CHANNELS,
       exitOnSilence: 0,
       debug: false,
       device: resolveAudioInputDevice(options.device),
@@ -146,10 +153,6 @@ export async function waitForWakeWordUtterance(options = {}) {
           capturedFrames = [...preRollFrames];
           silenceFrames = 0;
           options.onWake?.(event);
-          fastTranscriber = createFastTranscriber({
-            onPartial: options.onInterimTranscript,
-            onFinal: options.onFastFinalTranscript,
-          });
           for (const frame of capturedFrames) fastTranscriber.push(frame);
         } else if (event.type === 'error') {
           finish(new Error(`Wake word detector failed: ${event.error}`));
@@ -177,7 +180,7 @@ export async function waitForWakeWordUtterance(options = {}) {
       while (pending.length >= frameBytes) {
         const frame = pending.subarray(0, frameBytes);
         pending = pending.subarray(frameBytes);
-        processFrame(Buffer.from(frame));
+        processFrame(frame);
       }
 
       if (detector.stdin.writable) {
@@ -221,8 +224,9 @@ export function createFastTranscriber({
   onPartial,
   onFinal,
   enabled = process.env.VOICE_FAST_STT !== 'false',
+  warm = false,
 } = {}) {
-  if (!onPartial && !onFinal) return nullTranscriber();
+  if (!warm && !onPartial && !onFinal) return nullTranscriber();
   if (!enabled) return nullTranscriber();
 
   const provider = (process.env.VOICE_FAST_STT || 'vosk').trim().toLowerCase();
@@ -318,6 +322,53 @@ function nullTranscriber() {
   };
 }
 
+function voiceRuntimeConfig() {
+  cachedVoiceRuntimeConfig ||= {
+    frameMs: Number(process.env.VOICE_FRAME_MS || 80),
+    wakePreRollMs: Number(process.env.VOICE_PRE_ROLL_MS || 1200),
+    wakeMaxCaptureMs: Number(process.env.VOICE_WAKE_UTTERANCE_MAX_MS || 20000),
+    wakeMinCaptureMs: Number(process.env.VOICE_WAKE_UTTERANCE_MIN_MS || 700),
+    wakeSilenceMs: Number(process.env.VOICE_WAKE_UTTERANCE_SILENCE_MS || 900),
+    wakeSilenceThreshold: Number(process.env.VOICE_WAKE_SILENCE_RMS || 0.012),
+    recordEndSilenceMs: Number(process.env.VOICE_CHAT_END_SILENCE_MS || process.env.VOICE_END_SILENCE_MS || 700),
+    recordQuickEndSilenceMs: Number(process.env.VOICE_CHAT_QUICK_END_SILENCE_MS || process.env.VOICE_QUICK_END_SILENCE_MS || 520),
+    recordQuickEndAfterSpeechMs: Number(process.env.VOICE_CHAT_QUICK_END_AFTER_SPEECH_MS || process.env.VOICE_QUICK_END_AFTER_SPEECH_MS || 1000),
+    recordMinSpeechMs: Number(process.env.VOICE_MIN_SPEECH_MS || 160),
+    recordPreRollMs: Number(process.env.VOICE_RECORD_PRE_ROLL_MS || 400),
+    recordSilenceThreshold: Number(process.env.VOICE_CHAT_SILENCE_RMS || process.env.VOICE_SILENCE_RMS || 0.012),
+  };
+  return cachedVoiceRuntimeConfig;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 0, label = 'request') {
+  const timeout = Number(timeoutMs);
+  const upstreamSignal = options.signal;
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    return fetch(url, options);
+  }
+
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const timer = setTimeout(abort, timeout);
+  if (upstreamSignal?.aborted) abort();
+  upstreamSignal?.addEventListener?.('abort', abort, { once: true });
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted && !upstreamSignal?.aborted) {
+      throw new Error(`${label} timed out after ${timeout}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    upstreamSignal?.removeEventListener?.('abort', abort);
+  }
+}
+
 /**
  * Record audio from microphone with explicit options.
  * @param {number} durationMs - Maximum duration in milliseconds
@@ -326,24 +377,22 @@ function nullTranscriber() {
  */
 export async function recordAudioWithOptions(durationMs = 10000, options = {}) {
   return new Promise((resolve, reject) => {
+    const config = voiceRuntimeConfig();
     const chunks = [];
-    const sampleRate = 16000;
-    const channels = 1;
-    const frameMs = Number(options.frameMs ?? process.env.VOICE_FRAME_MS ?? 80);
-    const frameBytes = Math.max(2, Math.floor(sampleRate * frameMs / 1000 * 2));
+    const frameMs = Number(options.frameMs ?? config.frameMs);
+    const frameBytes = Math.max(2, Math.floor(SAMPLE_RATE * frameMs / 1000 * SAMPLE_WIDTH_BYTES));
     const maxRecordMs = Number(options.maxRecordMs ?? options.recordMs ?? process.env.VOICE_RECORD_MS ?? durationMs);
     const noSpeechTimeoutMs = Number(options.noSpeechTimeoutMs ?? process.env.VOICE_NO_SPEECH_TIMEOUT_MS ?? 4500);
     const endSilenceMs = Number(
       options.endSilenceMs
       ?? (options.silenceFrames != null ? Number(options.silenceFrames) * frameMs : undefined)
-      ?? process.env.VOICE_END_SILENCE_MS
-      ?? 700,
+      ?? config.recordEndSilenceMs,
     );
-    const quickEndSilenceMs = Number(options.quickEndSilenceMs ?? process.env.VOICE_QUICK_END_SILENCE_MS ?? 520);
-    const quickEndAfterSpeechMs = Number(options.quickEndAfterSpeechMs ?? process.env.VOICE_QUICK_END_AFTER_SPEECH_MS ?? 1000);
-    const minSpeechMs = Number(options.minSpeechMs ?? process.env.VOICE_MIN_SPEECH_MS ?? 160);
-    const preRollMs = Number(options.preRollMs ?? process.env.VOICE_RECORD_PRE_ROLL_MS ?? 400);
-    const silenceThreshold = Number(options.silenceThreshold ?? process.env.VOICE_SILENCE_RMS ?? 0.012);
+    const quickEndSilenceMs = Number(options.quickEndSilenceMs ?? config.recordQuickEndSilenceMs);
+    const quickEndAfterSpeechMs = Number(options.quickEndAfterSpeechMs ?? config.recordQuickEndAfterSpeechMs);
+    const minSpeechMs = Number(options.minSpeechMs ?? config.recordMinSpeechMs);
+    const preRollMs = Number(options.preRollMs ?? config.recordPreRollMs);
+    const silenceThreshold = Number(options.silenceThreshold ?? config.recordSilenceThreshold);
     const endSilenceFrames = Math.max(1, Math.ceil(endSilenceMs / frameMs));
     const quickEndSilenceFrames = Math.max(1, Math.ceil(quickEndSilenceMs / frameMs));
     const quickEndAfterSpeechFrames = Math.max(1, Math.ceil(quickEndAfterSpeechMs / frameMs));
@@ -368,8 +417,8 @@ export async function recordAudioWithOptions(durationMs = 10000, options = {}) {
     }
 
     const micInstance = new Mic({
-      rate: sampleRate,
-      channels,
+      rate: SAMPLE_RATE,
+      channels: CHANNELS,
       exitOnSilence: 0,
       debug: false,
       device: resolveAudioInputDevice(options.device),
@@ -608,13 +657,13 @@ export async function transcribeWithElevenLabs(audioBuffer, model = process.env.
     formData.append('language_code', language);
   }
 
-  const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+  const response = await fetchWithTimeout('https://api.elevenlabs.io/v1/speech-to-text', {
     method: 'POST',
     headers: {
       'xi-api-key': apiKey,
     },
     body: formData,
-  });
+  }, Number(process.env.STT_TIMEOUT_MS || 3000), 'ElevenLabs STT');
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -659,14 +708,14 @@ export async function transcribeWithDeepgram(audioBuffer, options = {}) {
 
   logger.info(`Transcribing with Deepgram STT (${model})...`);
 
-  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/listen?${params.toString()}`, {
+  const response = await fetchWithTimeout(`${baseUrl.replace(/\/$/, '')}/v1/listen?${params.toString()}`, {
     method: 'POST',
     headers: {
       Authorization: `Token ${apiKey}`,
       'Content-Type': 'audio/wav',
     },
     body: audioBuffer,
-  });
+  }, Number(process.env.STT_TIMEOUT_MS || 3000), 'Deepgram STT');
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => '');
@@ -1009,7 +1058,7 @@ export async function synthesizeWithElevenLabs(text, voiceId) {
   logger.info(`Synthesizing with ElevenLabs (voice: ${voiceId})...`);
 
   try {
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?optimize_streaming_latency=4&output_format=mp3_44100_128`, {
+    const response = await fetchWithTimeout(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?optimize_streaming_latency=4&output_format=mp3_44100_128`, {
       method: 'POST',
       headers: {
         'xi-api-key': apiKey,
@@ -1023,7 +1072,7 @@ export async function synthesizeWithElevenLabs(text, voiceId) {
           similarity_boost: 0.75,
         },
       }),
-    });
+    }, Number(process.env.TTS_TIMEOUT_MS || 3500), 'ElevenLabs TTS');
 
     if (!response.ok) {
       const error = await response.text();
@@ -1054,7 +1103,7 @@ export async function synthesizeWithInworld(text, voiceId = process.env.INWORLD_
   const payload = buildInworldTtsPayload(text, voiceId);
   logger.info(`Synthesizing with Inworld TTS (voice: ${voiceId}, model: ${payload.modelId})...`);
 
-  const response = await fetch('https://api.inworld.ai/tts/v1/voice', {
+  const response = await fetchWithTimeout('https://api.inworld.ai/tts/v1/voice', {
     method: 'POST',
     signal: options.signal,
     headers: {
@@ -1062,7 +1111,7 @@ export async function synthesizeWithInworld(text, voiceId = process.env.INWORLD_
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
-  });
+  }, Number(process.env.TTS_TIMEOUT_MS || 3500), 'Inworld TTS');
 
   if (!response.ok) {
     const error = await response.text();
@@ -1086,7 +1135,7 @@ export async function streamWithInworld(text, voiceId = process.env.INWORLD_VOIC
     throw new Error('INWORLD_API_KEY not set in environment');
   }
 
-  const response = await fetch('https://api.inworld.ai/tts/v1/voice:stream', {
+  const response = await fetchWithTimeout('https://api.inworld.ai/tts/v1/voice:stream', {
     method: 'POST',
     signal: options.signal,
     headers: {
@@ -1094,7 +1143,7 @@ export async function streamWithInworld(text, voiceId = process.env.INWORLD_VOIC
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(buildInworldTtsPayload(text, voiceId)),
-  });
+  }, Number(process.env.TTS_TIMEOUT_MS || 3500), 'Inworld TTS stream');
 
   if (!response.ok) {
     const error = await response.text();
@@ -1122,7 +1171,7 @@ export async function speakWithElevenLabs(text, voiceId, options = {}) {
     throw new Error('ELEVENLABS_API_KEY not set in environment');
   }
 
-  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?optimize_streaming_latency=4&output_format=mp3_44100_128`, {
+  const response = await fetchWithTimeout(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?optimize_streaming_latency=4&output_format=mp3_44100_128`, {
     method: 'POST',
     headers: {
       'xi-api-key': apiKey,
@@ -1137,7 +1186,7 @@ export async function speakWithElevenLabs(text, voiceId, options = {}) {
         similarity_boost: 0.75,
       },
     }),
-  });
+  }, Number(process.env.TTS_TIMEOUT_MS || 3500), 'ElevenLabs TTS');
 
   if (!response.ok) {
     const error = await response.text();

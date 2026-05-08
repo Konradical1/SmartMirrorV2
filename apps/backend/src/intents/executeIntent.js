@@ -9,7 +9,15 @@ import { handleSpotify, handleSpotifyControl } from '../handlers/spotify.js';
 import { handleAddTodo, handleCheckTodo, handleTodo } from '../handlers/todo.js';
 import { handleWeather } from '../handlers/weather.js';
 import { buildNowContext } from '../jarvis/context.js';
-import { loadMemory, updateMemory } from '../services/memoryService.js';
+import {
+  forgetLastTurns,
+  forgetSession,
+  forgetTopic,
+  loadMemory,
+  showFixes,
+  summarizeLongTermMemory,
+  updateMemory,
+} from '../services/memoryService.js';
 import { triggerVoiceMonkeyRoutine } from '../services/voiceMonkeyService.js';
 import { setLastIntent, setScene, setScreenOn } from '../state.js';
 import { broadcastAction, broadcastUiState } from '../websocket.js';
@@ -85,6 +93,29 @@ export async function executeIntent(intent, params = {}) {
       const memory = await loadMemory();
       setLastIntent('SHOW_MEMORY');
       return { ok: true, data: { memory }, ui: { scene: 'idle' } };
+    }
+    case 'SHOW_FIXES': {
+      const fixes = await showFixes();
+      setLastIntent('SHOW_FIXES');
+      return { ok: true, data: { fixes }, ui: { scene: 'idle' } };
+    }
+    case 'SUMMARIZE_MEMORY': {
+      const memory = await summarizeLongTermMemory();
+      setLastIntent('SUMMARIZE_MEMORY');
+      return { ok: true, data: { memory }, ui: { scene: 'idle' } };
+    }
+    case 'FORGET_MEMORY': {
+      if (params.sessionId || params.session) {
+        const result = await forgetSession(params.sessionId || params.session);
+        setLastIntent('FORGET_MEMORY');
+        return { ok: true, data: { forgotten: result }, ui: { scene: 'idle' } };
+      }
+      const topic = params.topic || params.query || params.text;
+      const result = topic
+        ? await forgetTopic(topic)
+        : await forgetLastTurns(params.count || params.n || 1);
+      setLastIntent('FORGET_MEMORY');
+      return { ok: true, data: { forgotten: result }, ui: { scene: 'idle' } };
     }
     case 'DISPLAY_MESSAGE':
       setLastIntent('DISPLAY_MESSAGE');

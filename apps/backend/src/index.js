@@ -13,7 +13,16 @@ import {
   publicJarvisErrorMessage,
   runJarvisTurn,
 } from './jarvis/pipeline.js';
-import { loadMemory } from './services/memoryService.js';
+import {
+  getPromptHistory,
+  forgetSession,
+  forgetTopic,
+  loadMemory,
+  memoryStats,
+  setAutoRewriteEnabled,
+  showFixes,
+  summarizeLongTermMemory,
+} from './services/memoryService.js';
 import { state } from './state.js';
 import { logger } from './utils/logger.js';
 import { broadcastOverlay, broadcastVoiceStatus, attachWebSocket } from './websocket.js';
@@ -51,9 +60,11 @@ app.post('/jarvis-command', async (request, response) => {
   try {
     const input = String(request.body?.input || request.body?.text || request.body?.transcript || '').trim();
     const history = Array.isArray(request.body?.history) ? request.body.history : [];
-    const result = await runJarvisTurn(input, { history, broadcast: true });
+    const sessionId = String(request.body?.sessionId || request.body?.session_id || '').trim();
+    const result = await runJarvisTurn(input, { history, broadcast: true, sessionId });
     response.json({
       ok: true,
+      sessionId: result.sessionId,
       speech: result.speech,
       intent: result.intent,
       params: result.params,
@@ -72,6 +83,59 @@ app.post('/jarvis-command', async (request, response) => {
       speech: failureSpeech,
       error: publicJarvisErrorMessage(error),
     });
+  }
+});
+
+app.get('/admin/memory', async (request, response) => {
+  try {
+    response.json({
+      ok: true,
+      stats: await memoryStats(),
+      summary: await summarizeLongTermMemory(),
+    });
+  } catch (error) {
+    response.status(error.status || 500).json({ ok: false, error: publicJarvisErrorMessage(error) });
+  }
+});
+
+app.get('/admin/memory/fixes', async (request, response) => {
+  try {
+    response.json({ ok: true, fixes: await showFixes() });
+  } catch (error) {
+    response.status(error.status || 500).json({ ok: false, error: publicJarvisErrorMessage(error) });
+  }
+});
+
+app.delete('/admin/memory/session/:sessionId', async (request, response) => {
+  try {
+    response.json({ ok: true, forgotten: await forgetSession(request.params.sessionId) });
+  } catch (error) {
+    response.status(error.status || 500).json({ ok: false, error: publicJarvisErrorMessage(error) });
+  }
+});
+
+app.delete('/admin/memory/topic', async (request, response) => {
+  try {
+    response.json({ ok: true, forgotten: await forgetTopic(request.query.q || request.body?.query || request.body?.topic) });
+  } catch (error) {
+    response.status(error.status || 500).json({ ok: false, error: publicJarvisErrorMessage(error) });
+  }
+});
+
+app.get('/admin/prompts/history', async (request, response) => {
+  try {
+    response.json({ ok: true, history: await getPromptHistory() });
+  } catch (error) {
+    response.status(error.status || 500).json({ ok: false, error: publicJarvisErrorMessage(error) });
+  }
+});
+
+app.post('/admin/prompts/auto-rewrite', async (request, response) => {
+  try {
+    const enabled = request.body?.enabled ?? request.body?.autoRewriteEnabled ?? true;
+    response.json({ ok: true, meta: await setAutoRewriteEnabled(enabled) });
+  } catch (error) {
+    response.status(error.status || 500).json({ ok: false, error: publicJarvisErrorMessage(error) });
   }
 });
 

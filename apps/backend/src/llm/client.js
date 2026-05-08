@@ -2,7 +2,7 @@ import fetch from 'node-fetch';
 import { logger } from '../utils/logger.js';
 
 export function activeLlmProvider() {
-  return (process.env.LLM_PROVIDER || 'groq').trim().toLowerCase();
+  return normalizeLlmProvider(process.env.LLM_PROVIDER || 'openrouter');
 }
 
 export function llmConfig(provider = activeLlmProvider()) {
@@ -71,19 +71,48 @@ export function llmConfig(provider = activeLlmProvider()) {
     };
   }
 
-  return {
-    name: 'Groq',
-    provider: 'groq',
-    apiKey: process.env.GROQ_API_KEY,
-    apiKeyName: 'GROQ_API_KEY',
-    url: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1/chat/completions',
-    model: process.env.GROQ_MODEL || process.env.LLM_MODEL || 'llama-3.3-70b-versatile',
-    maxTokens: Number(process.env.GROQ_MAX_TOKENS || process.env.LLM_MAX_TOKENS || 300),
-    temperature: Number(process.env.GROQ_TEMPERATURE || process.env.LLM_TEMPERATURE || 0.3),
-  };
+  return llmConfig('openrouter');
 }
 
 export async function llmText({
+  messages,
+  provider = activeLlmProvider(),
+  model,
+  maxTokens,
+  temperature,
+  topP,
+  purpose = 'chat',
+} = {}) {
+  const providers = llmProviderOrder(provider);
+  let lastError;
+
+  for (const providerName of providers) {
+    try {
+      return await llmTextOnce({
+        messages,
+        provider: providerName,
+        model,
+        maxTokens,
+        temperature,
+        topP,
+        purpose,
+      });
+    } catch (error) {
+      lastError = error;
+      if (providerName !== providers[providers.length - 1]) {
+        const failedConfig = llmConfig(providerName);
+        const fallbackConfig = llmConfig(providers[providers.length - 1]);
+        logger.warn(
+          `LLM ${purpose}: ${failedConfig.name} failed, trying ${fallbackConfig.name}: ${error.message}`,
+        );
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+async function llmTextOnce({
   messages,
   provider = activeLlmProvider(),
   model,
@@ -126,11 +155,11 @@ export async function llmText({
 
   logger.info(`LLM ${purpose}: ${config.name} (${body.model})`);
 
-  const response = await fetch(config.url, {
+  const response = await fetchWithTimeout(config.url, {
     method: 'POST',
     headers: headersFor(config),
     body: JSON.stringify(body),
-  });
+  }, llmTimeoutMs(purpose), `${config.name} LLM ${purpose}`);
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
@@ -143,6 +172,17 @@ export async function llmText({
     throw new Error(`${config.name} LLM returned no content.`);
   }
   return cleanModelText(content);
+}
+
+function llmProviderOrder(provider = activeLlmProvider()) {
+  const primary = normalizeLlmProvider(provider || 'openrouter');
+  const fallback = normalizeLlmProvider(process.env.LLM_FALLBACK_PROVIDER || 'openrouter');
+  return [...new Set([primary, fallback].filter(Boolean))];
+}
+
+function normalizeLlmProvider(provider) {
+  const value = String(provider || '').trim().toLowerCase();
+  return value === 'groq' ? 'openrouter' : value;
 }
 
 export async function llmJson(options = {}) {
@@ -198,13 +238,13 @@ async function geminiText({
 
   logger.info(`LLM ${purpose}: ${config.name} (${chosenModel})`);
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-  });
+  }, llmTimeoutMs(purpose), `${config.name} LLM ${purpose}`);
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
@@ -245,6 +285,43 @@ function toGeminiContents(messages) {
 function finiteOr(value, defaultValue) {
   const number = Number(value);
   return Number.isFinite(number) ? number : defaultValue;
+}
+
+function llmTimeoutMs(purpose = '') {
+  const value = String(purpose || '').toLowerCase();
+  if (value.includes('intent') || value.includes('router')) {
+    return Number(process.env.LLM_ROUTER_TIMEOUT_MS || process.env.LLM_TIMEOUT_MS || 1800);
+  }
+  if (value.includes('response')) {
+    return Number(process.env.LLM_RESPONSE_TIMEOUT_MS || process.env.LLM_TIMEOUT_MS || 2500);
+  }
+  if (value.includes('memory') || value.includes('correction')) {
+    return Number(process.env.LLM_MEMORY_TIMEOUT_MS || process.env.LLM_TIMEOUT_MS || 2500);
+  }
+  return Number(process.env.LLM_TIMEOUT_MS || 3000);
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 0, label = 'request') {
+  const timeout = Number(timeoutMs);
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    return fetch(url, options);
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`${label} timed out after ${timeout}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function cleanModelText(text) {

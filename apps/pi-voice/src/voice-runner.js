@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import dotenv from 'dotenv';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fetch from 'node-fetch';
@@ -118,13 +119,14 @@ while (true) {
 }
 
 async function runConversationSession({ initialPcm = null, source = '' } = {}) {
+  const sessionId = `voice-${crypto.randomUUID()}`;
   let history = [];
   let silenceStartedAt = null;
   let queuedTurn = initialPcm?.length ? { pcm: initialPcm, source: source || 'wake' } : null;
   let turnCount = 0;
   let promptedForWakeOnly = false;
 
-  logger.info(`conversation session started${source ? ` (${source})` : ''}`);
+  logger.info(`conversation session started ${sessionId}${source ? ` (${source})` : ''}`);
 
   while (true) {
     const turnLabel = `turn ${++turnCount}`;
@@ -150,6 +152,7 @@ async function runConversationSession({ initialPcm = null, source = '' } = {}) {
       logger.info(`${turnLabel} audio ${pcm.length} bytes`);
     }
 
+    await postVoiceStatus('thinking', '');
     const wav = await pcmToWav(pcm);
     const transcriptResult = await transcribeAudio(wav, {
       provider: sttProvider,
@@ -189,7 +192,7 @@ async function runConversationSession({ initialPcm = null, source = '' } = {}) {
     });
     await postVoiceStatus('thinking', transcript);
 
-    const result = await postJarvisCommand(transcript, history);
+    const result = await postJarvisCommand(transcript, history, sessionId);
     logger.info(`${turnLabel} intent ${result.intent}`);
     logger.info(`${turnLabel} params ${JSON.stringify(result.params || {})}`);
     logger.info(`${turnLabel} jarvis ${result.speech || '[empty]'}`);
@@ -223,12 +226,12 @@ async function runConversationSession({ initialPcm = null, source = '' } = {}) {
   }
 }
 
-async function postJarvisCommand(input, history = []) {
-  const response = await fetch(`${backendBaseUrl}/jarvis-command`, {
+async function postJarvisCommand(input, history = [], sessionId = '') {
+  const response = await fetchWithTimeout(`${backendBaseUrl}/jarvis-command`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ input, history }),
-  });
+    body: JSON.stringify({ input, history, sessionId }),
+  }, Number(process.env.VOICE_BACKEND_COMMAND_TIMEOUT_MS || 12000), 'backend Jarvis command');
 
   const text = await response.text();
   const payload = parseJson(text) || {};
@@ -240,11 +243,11 @@ async function postJarvisCommand(input, history = []) {
 
 async function postVoiceStatus(status, text = '', meta = {}) {
   try {
-    await fetch(`${backendBaseUrl}/voice-status`, {
+    await fetchWithTimeout(`${backendBaseUrl}/voice-status`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status, text, ...meta }),
-    });
+    }, Number(process.env.VOICE_STATUS_TIMEOUT_MS || 1200), 'voice status');
   } catch (error) {
     logger.warn(`voice-status failed: ${error.message}`);
   }
@@ -307,6 +310,29 @@ function readFlag(name) {
   const next = args[index + 1];
   if (!next || next.startsWith('--')) return { present: true, value: '' };
   return { present: true, value: next };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 0, label = 'request') {
+  const timeout = Number(timeoutMs);
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    return fetch(url, options);
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`${label} timed out after ${timeout}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function stripWakeInvocation(text) {

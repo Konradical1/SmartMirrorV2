@@ -17,6 +17,9 @@ export function matchFastIntent(input = '') {
     return { intent: 'END_CONVERSATION', params: {}, fast: true, reason: 'conversation-end' };
   }
 
+  const memoryControlRoute = matchMemoryControlIntent(text);
+  if (memoryControlRoute) return memoryControlRoute;
+
   if (isMemoryRequest(text)) {
     return { intent: 'SHOW_MEMORY', params: {}, fast: true, reason: 'memory' };
   }
@@ -183,4 +186,47 @@ function isMemoryRequest(text) {
     || /\bread (my )?memory\b/.test(text)
     || /\bmy memory\b/.test(text)
     || /\bwhat(?:'s| is) in (my )?memory\b/.test(text);
+}
+
+function matchMemoryControlIntent(text) {
+  if (/\b(show|list|read)\b.*\b(fixes|corrections|behavior rules)\b/.test(text)) {
+    return { intent: 'SHOW_FIXES', params: {}, fast: true, reason: 'memory-controls' };
+  }
+
+  if (/\b(summarize|summary)\b.*\b(memory|memories|projects|tasks)\b/.test(text)
+    || /\bwhat do you remember about my projects\b/.test(text)) {
+    return { intent: 'SUMMARIZE_MEMORY', params: {}, fast: true, reason: 'memory-summary' };
+  }
+
+  const forgetLast = text.match(/\bforget\s+(?:the\s+)?last\s+(\d+)\b/);
+  if (forgetLast) {
+    return {
+      intent: 'FORGET_MEMORY',
+      params: { count: Number(forgetLast[1]) },
+      fast: true,
+      reason: 'memory-forget',
+    };
+  }
+
+  const forgetSession = text.match(/\bforget\s+session\s+([a-z0-9_.:-]+)\b/i);
+  if (forgetSession?.[1]) {
+    return {
+      intent: 'FORGET_MEMORY',
+      params: { sessionId: forgetSession[1].trim() },
+      fast: true,
+      reason: 'memory-forget',
+    };
+  }
+
+  const forgetTopic = text.match(/\bforget\s+(?:topic|about|memory about)\s+(.+)$/);
+  if (forgetTopic?.[1]) {
+    return {
+      intent: 'FORGET_MEMORY',
+      params: { topic: forgetTopic[1].trim() },
+      fast: true,
+      reason: 'memory-forget',
+    };
+  }
+
+  return null;
 }

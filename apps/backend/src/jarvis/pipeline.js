@@ -1,5 +1,11 @@
 import { executeIntent } from '../intents/executeIntent.js';
 import { llmJson, llmText } from '../llm/client.js';
+import {
+  loadPromptOverlaySync,
+  logJarvisTurn,
+  retrieveMemoryContext,
+  scheduleMemoryConsolidation,
+} from '../services/memoryService.js';
 import { logger } from '../utils/logger.js';
 import { broadcastAction, broadcastOverlay } from '../websocket.js';
 import { buildJarvisContext } from './context.js';
@@ -51,6 +57,7 @@ export async function runJarvisTurn(input, {
   history = [],
   route = null,
   broadcast = true,
+  sessionId = '',
 } = {}) {
   const userInput = String(input || '').trim();
   if (!userInput) throw new Error('No input text received.');
@@ -61,14 +68,14 @@ export async function runJarvisTurn(input, {
 
   const toolResult = await executeIntent(routed.intent, routed.params || {});
   const context = buildJarvisContext();
-  const speech = routed.fast
-    ? fastSpeechFor(routed, toolResult, context)
-    : await composeJarvisResponse({
+  const fastSpeech = routed.fast ? fastSpeechFor(routed, toolResult, context) : '';
+  const speech = fastSpeech || await composeJarvisResponse({
       userInput,
       route: routed,
       toolResult,
       context,
       history,
+      sessionId,
     });
 
   const display = jarvisDisplayTiming(speech, {
@@ -89,9 +96,10 @@ export async function runJarvisTurn(input, {
     }
   }
 
-  return {
+  const result = {
     ok: true,
     input: userInput,
+    sessionId,
     route: routed,
     intent: routed.intent,
     params: routed.params || {},
@@ -102,6 +110,28 @@ export async function runJarvisTurn(input, {
     speechDisplayMs: display.speechDisplayMs,
     speech,
   };
+
+  setTimeout(() => {
+    logJarvisTurn({
+      sessionId,
+      userInput,
+      assistantText: speech,
+      route: routed,
+      toolResult,
+      history,
+    })
+      .then(() => scheduleMemoryConsolidation({
+        sessionId,
+        userInput,
+        assistantText: speech,
+        route: routed,
+        toolResult,
+        history,
+      }))
+      .catch((error) => logger.warn(`Jarvis memory work skipped: ${publicJarvisErrorMessage(error)}`));
+  }, 0);
+
+  return result;
 }
 
 export function jarvisDisplayTiming(speech = '', { intent = '', hasToolScene = false } = {}) {
@@ -120,6 +150,7 @@ export async function composeJarvisResponse({
   toolResult,
   context = buildJarvisContext(),
   history = [],
+  sessionId = '',
 } = {}) {
   const directSpeech = fastSpeechFor(route, toolResult, context);
   if (directSpeech) return directSpeech;
@@ -129,20 +160,36 @@ export async function composeJarvisResponse({
   if (route?.intent === 'DISPLAY_MESSAGE' && isCasualGreeting(userInput)) return casualGreetingResponse(userInput);
 
   try {
+    const retrieval = route?.intent === 'SHOW_MEMORY'
+      ? { block: '', snippets: [] }
+      : await retrieveMemoryContext({
+          userInput,
+          taskSummary: `${route?.intent || ''} ${JSON.stringify(route?.params || {})}`,
+          sessionId,
+        });
+
     const payload = {
       userInput,
       route,
       toolResult,
-      context,
+      context: {
+        ...context,
+        retrievedMemory: retrieval.block,
+        retrievedMemorySnippets: retrieval.snippets,
+      },
       responseRequirements: responseRequirements(route, toolResult, userInput),
     };
+    const overlay = loadPromptOverlaySync();
+    const systemPrompt = overlay
+      ? `${responsePrompt}\n\nLong-term behavior overlay:\n${overlay}`
+      : responsePrompt;
 
     let content = await llmText({
       purpose: 'response',
       maxTokens: Number(process.env.JARVIS_RESPONSE_MAX_TOKENS || 100),
       temperature: Number(process.env.JARVIS_RESPONSE_TEMPERATURE || 0.65),
       messages: [
-        { role: 'system', content: responsePrompt },
+        { role: 'system', content: systemPrompt },
         ...historyToMessages(history).slice(-8),
         { role: 'user', content: JSON.stringify(payload) },
       ],
@@ -166,7 +213,7 @@ export async function composeJarvisResponse({
         messages: [
           {
             role: 'system',
-            content: `${responsePrompt}\n\nYour previous response failed because: ${failureReason}. Rewrite it and satisfy responseRequirements exactly. Do not use the bare generic failure line.`,
+            content: `${systemPrompt}\n\nYour previous response failed because: ${failureReason}. Rewrite it and satisfy responseRequirements exactly. Do not use the bare generic failure line.`,
           },
           {
             role: 'user',
@@ -377,9 +424,22 @@ function responseRequirements(route = {}, toolResult = {}, userInput = '') {
 
   if (intent === 'SHOW_MEMORY') {
     return [
-      'Use the provided saved facts.',
+      'Use toolResult.data.memory as the source of truth.',
+      'Do not use retrievedMemory or chat history to add extra facts.',
       'Do not answer generically.',
     ];
+  }
+
+  if (intent === 'SHOW_FIXES') {
+    return ['Summarize stored corrections and behavior fixes briefly.'];
+  }
+
+  if (intent === 'SUMMARIZE_MEMORY') {
+    return ['Summarize remembered projects, tasks, preferences, and fixes using retrievedMemory and tool data.'];
+  }
+
+  if (intent === 'FORGET_MEMORY') {
+    return ['Confirm what memory was forgotten and how many records were removed.'];
   }
 
   if (intent === 'END_CONVERSATION') {
