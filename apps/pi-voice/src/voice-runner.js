@@ -322,7 +322,8 @@ function isWakeOnlyInvocation(text) {
 }
 
 function shouldEndConversation(intent, transcript) {
-  return String(intent || '').trim().toUpperCase() === 'END_CONVERSATION'
+  const normalizedIntent = String(intent || '').trim().toUpperCase();
+  return ['END_CONVERSATION', 'SCREEN_OFF', 'MIRROR_SCREEN_OFF', 'GOODNIGHT', 'GOOD_NIGHT'].includes(normalizedIntent)
     || /\b(goodbye|bye|done with you|that'?s all|that is all|all set|we'?re done|we are done|you can stop|stop conversation)\b/i.test(String(transcript || ''));
 }
 

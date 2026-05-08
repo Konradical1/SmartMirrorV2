@@ -77,6 +77,16 @@ export function broadcastVoiceStatus(status, text = '', meta = {}) {
   });
 }
 
+export function broadcastUiState(payload = {}) {
+  broadcast({
+    type: 'UI_STATE',
+    payload: {
+      ...state.ui,
+      ...payload,
+    },
+  });
+}
+
 function sendSnapshot(socket) {
   const payload = Object.fromEntries(
     Object.entries(state.context).filter(([, value]) => value !== null && value !== undefined),
@@ -88,6 +98,11 @@ function sendSnapshot(socket) {
       payload,
     }));
   }
+
+  socket.send(JSON.stringify({
+    type: 'UI_STATE',
+    payload: state.ui,
+  }));
 
   socket.send(JSON.stringify({
     type: 'VOICE_STATUS',

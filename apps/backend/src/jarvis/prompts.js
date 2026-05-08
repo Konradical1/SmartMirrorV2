@@ -23,6 +23,9 @@ Supported intents:
 - SHOW_EMAIL
 - UPDATE_MEMORY
 - SHOW_MEMORY
+- SCREEN_ON
+- SCREEN_OFF
+- GOODNIGHT
 - DISPLAY_MESSAGE
 - END_CONVERSATION
 - IDLE
@@ -38,6 +41,9 @@ Rules:
 - Use ADD_TODO and CHECK_TODO for tasks.
 - Use UPDATE_MEMORY only when the user explicitly asks you to remember stable personal context.
 - Use SHOW_MEMORY when the user asks what you know or remember about them.
+- Use SCREEN_ON when the user asks to turn on, show, or wake the mirror screen/display/UI.
+- Use SCREEN_OFF when the user asks to turn off, hide, blank, or sleep the mirror screen/display/UI.
+- Use GOODNIGHT when the user says goodnight, bedtime, or that they are going to bed. This runs the nighttime routine.
 - Use END_CONVERSATION when the user says they are done, goodbye, all set, or asks to stop.
 - Use DISPLAY_MESSAGE for normal conversation or unsupported requests. Set params.text to the user's original message.
 - If uncertain, choose DISPLAY_MESSAGE.

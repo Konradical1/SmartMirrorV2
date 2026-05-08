@@ -4,6 +4,7 @@ export const state = {
   ui: {
     connected: false,
     lastSeenAt: null,
+    screenOn: true,
   },
   context: {
     weather: null,
@@ -31,6 +32,14 @@ export function updateUi(payload = {}) {
     ...state.ui,
     ...payload,
     connected: true,
+    lastSeenAt: new Date().toISOString(),
+  };
+}
+
+export function setScreenOn(screenOn) {
+  state.ui = {
+    ...state.ui,
+    screenOn: Boolean(screenOn),
     lastSeenAt: new Date().toISOString(),
   };
 }

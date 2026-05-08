@@ -4,6 +4,12 @@ export function matchFastIntent(input = '') {
   const text = normalizeCommandText(input);
   if (!text) return null;
 
+  const goodnightRoute = matchGoodnightIntent(text);
+  if (goodnightRoute) return goodnightRoute;
+
+  const screenRoute = matchScreenIntent(text);
+  if (screenRoute) return screenRoute;
+
   const smartHomeRoute = matchSmartHomeIntent(text);
   if (smartHomeRoute) return smartHomeRoute;
 
@@ -26,6 +32,40 @@ export function matchFastIntent(input = '') {
       fast: true,
       reason: isTemperatureOnlyRequest(text) ? 'temperature' : 'weather',
     };
+  }
+
+  return null;
+}
+
+function matchScreenIntent(text) {
+  const command = stripCommandFillers(text);
+  const hasMirror = /\b(mirror|screen|display|ui|interface)\b/.test(command);
+  if (!hasMirror) return null;
+
+  if (/\b(on|show|wake|enable|turn on|switch on|power on|bring back|light up)\b/.test(command)) {
+    return { intent: 'SCREEN_ON', params: {}, fast: true, reason: 'screen-on' };
+  }
+
+  if (/\b(off|hide|blank|sleep|disable|turn off|switch off|power off|shut off|black out|blackout)\b/.test(command)) {
+    return { intent: 'SCREEN_OFF', params: {}, fast: true, reason: 'screen-off' };
+  }
+
+  return null;
+}
+
+function matchGoodnightIntent(text) {
+  const command = stripCommandFillers(text);
+  if (/^(good\s*night|night|bedtime)$/.test(command)) {
+    return { intent: 'GOODNIGHT', params: {}, fast: true, reason: 'goodnight' };
+  }
+
+  if (
+    /\b(good\s*night|bedtime)\b/.test(command)
+    || /\b(?:i am|i'm|im)\s+(?:going|gonna|headed|off)\s+to\s+bed\b/.test(command)
+    || /\b(?:alright|all right|okay|ok)?\s*(?:i am|i'm|im)\s+(?:going|gonna|headed|off)\s+to\s+sleep\b/.test(command)
+    || /\b(?:calling|call)\s+it\s+(?:a\s+)?night\b/.test(command)
+  ) {
+    return { intent: 'GOODNIGHT', params: {}, fast: true, reason: 'goodnight' };
   }
 
   return null;

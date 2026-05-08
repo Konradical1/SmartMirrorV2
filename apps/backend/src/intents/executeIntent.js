@@ -11,8 +11,8 @@ import { handleWeather } from '../handlers/weather.js';
 import { buildNowContext } from '../jarvis/context.js';
 import { loadMemory, updateMemory } from '../services/memoryService.js';
 import { triggerVoiceMonkeyRoutine } from '../services/voiceMonkeyService.js';
-import { setLastIntent, setScene } from '../state.js';
-import { broadcastAction } from '../websocket.js';
+import { setLastIntent, setScene, setScreenOn } from '../state.js';
+import { broadcastAction, broadcastUiState } from '../websocket.js';
 
 export async function executeIntent(intent, params = {}) {
   switch (intent) {
@@ -26,6 +26,15 @@ export async function executeIntent(intent, params = {}) {
       setLastIntent('RUN_SMART_HOME_ROUTINE');
       return { ok: true, data: { smartHome: result }, ui: { scene: 'idle' } };
     }
+    case 'SCREEN_ON':
+    case 'MIRROR_SCREEN_ON':
+      return setMirrorScreen(true, intent);
+    case 'SCREEN_OFF':
+    case 'MIRROR_SCREEN_OFF':
+      return setMirrorScreen(false, intent);
+    case 'GOODNIGHT':
+    case 'GOOD_NIGHT':
+      return runGoodnightRoutine();
     case 'SHOW_CALENDAR':
       return handleCalendar(params);
     case 'ADD_CALENDAR_EVENT':
@@ -92,4 +101,51 @@ export async function executeIntent(intent, params = {}) {
       setLastIntent(intent);
       return { ok: true, data: { unknownIntent: intent }, ui: { scene: 'idle' } };
   }
+}
+
+function setMirrorScreen(screenOn, intent = '') {
+  setScene('idle');
+  setLastIntent(intent || (screenOn ? 'SCREEN_ON' : 'SCREEN_OFF'));
+  setScreenOn(screenOn);
+  broadcastUiState({ screenOn });
+  return {
+    ok: true,
+    data: { screen: { screenOn } },
+    ui: { scene: 'idle', screenOn },
+  };
+}
+
+async function runGoodnightRoutine() {
+  const routines = [];
+
+  for (const routine of ['lightsOff', 'fanOn']) {
+    try {
+      const result = await triggerVoiceMonkeyRoutine(routine);
+      routines.push({
+        ok: true,
+        routine,
+        device: result.device,
+        status: result.status,
+      });
+    } catch (error) {
+      routines.push({
+        ok: false,
+        routine,
+        error: error.publicMessage || error.message || 'Routine failed.',
+      });
+    }
+  }
+
+  const screen = setMirrorScreen(false, 'GOODNIGHT');
+  return {
+    ok: true,
+    data: {
+      ...screen.data,
+      goodnight: {
+        routines,
+        complete: routines.every((routine) => routine.ok),
+      },
+    },
+    ui: screen.ui,
+  };
 }

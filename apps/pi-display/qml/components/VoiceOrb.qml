@@ -64,7 +64,7 @@ Item {
         id: outerRing
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 18
+        anchors.bottomMargin: 0
         width: root.ringSize
         height: width
         radius: width / 2

@@ -53,6 +53,18 @@ export function fastSpeechFor(route, toolResult, context) {
     return smartHomeSpeech(route.params?.routine);
   }
 
+  if (route.intent === 'SCREEN_ON' || route.intent === 'MIRROR_SCREEN_ON') {
+    return 'Mirror on.';
+  }
+
+  if (route.intent === 'SCREEN_OFF' || route.intent === 'MIRROR_SCREEN_OFF') {
+    return 'Mirror off.';
+  }
+
+  if (route.intent === 'GOODNIGHT' || route.intent === 'GOOD_NIGHT') {
+    return goodnightSpeech(toolResult);
+  }
+
   if (route.intent === 'SHOW_TIME') {
     return fill(pick(timeTemplates), context.now);
   }
@@ -77,6 +89,21 @@ export function fastSpeechFor(route, toolResult, context) {
   }
 
   return '';
+}
+
+function goodnightSpeech(toolResult = {}) {
+  const routines = toolResult?.data?.goodnight?.routines || [];
+  const failed = routines.filter((routine) => !routine.ok);
+
+  if (failed.length) {
+    return 'Screen off. The room tried to cooperate; inspect the smart home routine.';
+  }
+
+  return pick([
+    'Goodnight. Lights off, fan on, mirror asleep.',
+    'Night mode engaged. Try not to negotiate with tomorrow.',
+    'Goodnight. Darkness, airflow, silence. Very civilized.',
+  ]);
 }
 
 function spotifyControlSpeech(route, toolResult, context) {
